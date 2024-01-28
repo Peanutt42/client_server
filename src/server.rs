@@ -2,21 +2,8 @@ use std::collections::{HashMap, VecDeque};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
-use crate::ClientId;
+use crate::{ClientId, ClientPacket, ClientMessage, ServerPacket};
 
-pub struct ClientPacket {
-	pub sender: ClientId,
-	pub data: String,
-}
-
-impl ClientPacket {
-	pub fn new(sender: ClientId, data: String) -> Self {
-		Self {
-			sender,
-            data,
-		}
-	}
-}
 pub struct ClientData {
 	stream: TcpStream,
 }
@@ -58,23 +45,49 @@ impl SharedData {
 		self.clients.remove(&client_id);
 	}
 
-	fn broadcast_all(&mut self, buf: &[u8]) -> io::Result<()> {
-		for (_client_id, client) in self.clients.iter_mut() {
-			client.stream.write_all(buf)?;
+	fn send(&mut self, packet: &ServerPacket, client_id: ClientId) -> io::Result<()> {
+		match bincode::serialize(packet) {
+			Ok(buffer) => {
+				match self.clients.get_mut(&client_id) {
+					Some(client) => client.stream.write_all(buffer.as_slice()),
+					None => Err(io::Error::new(io::ErrorKind::Other, "Client id doesn't exist")),
+				}
+			},
+			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
 		}
+	}
 
-		Ok(())
+	fn broadcast_all(&mut self, packet: &ServerPacket) -> io::Result<()> {
+		match bincode::serialize(packet) {
+			Ok(buffer) => {
+				let mut error_msg = Ok(());
+				for (_client_id, client) in self.clients.iter_mut() {
+					if let Err(e) = client.stream.write_all(buffer.as_slice()) {
+						error_msg = Err(e);
+					}
+				}
+				error_msg
+			},
+			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+		}
 	}
 
 	/// if you want to broadcast to all clients, use `broadcast_all`
-	fn broadcast(&mut self, buf: &[u8], ignored_client: ClientId) -> io::Result<()> {
-		for (client_id, client) in self.clients.iter_mut() {
-			if *client_id != ignored_client {
-				client.stream.write_all(buf)?;
-			}
+	fn broadcast(&mut self, packet: &ServerPacket, ignored_client: ClientId) -> io::Result<()> {
+		match bincode::serialize(packet) {
+			Ok(buffer) => {
+				let mut error_msg = Ok(());
+				for (client_id, client) in self.clients.iter_mut() {
+					if *client_id != ignored_client {
+						if let Err(e) = client.stream.write_all(buffer.as_slice()) {
+							error_msg = Err(e);
+						}
+					}
+				}
+				error_msg
+			},
+			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
 		}
-
-		Ok(())
 	}
 }
 
@@ -90,8 +103,8 @@ impl Server {
 		std::thread::spawn(move || Self::listen_thread(listener, shared_data_clone));
 
 		Self {
-            shared_data,
-        }
+			shared_data,
+		}
 	}
 
 	pub fn bind<A>(addr: A) -> io::Result<Self> 
@@ -107,19 +120,29 @@ impl Server {
 
 	fn handle_client_thread(mut stream: TcpStream, shared_data: Arc<Mutex<SharedData>>) {
 		let mut buffer = [0; 512];
+		let client_id: ClientId;
 
-		let client_id = shared_data.lock().unwrap().add_client(stream.try_clone().expect("Failed to clone stream"));
-	
+		{
+			let mut shared_data = shared_data.lock().unwrap();
+			client_id = shared_data.add_client(stream.try_clone().expect("Failed to clone stream"));
+			shared_data.send(&ServerPacket::ConnectResponse(client_id), client_id).expect("failed to send the connect response to client");
+
+			shared_data.broadcast(&ServerPacket::ClientConnected(client_id), client_id)
+				.expect("failed to send 'ClientConnected' to all other clients");
+		}
+
 		loop {
 			match stream.read(&mut buffer) {
 				Ok(bytes_read) => {
 					if bytes_read == 0 {
-						shared_data.lock().unwrap().packets.push_back(ClientPacket::new(client_id, "disconnected".to_string()));
+						shared_data.lock().unwrap().packets.push_back(ClientPacket::new(client_id, ClientMessage::Disconnected));
 						break;
 					}
 	
-					let message = &buffer[..bytes_read];
-					shared_data.lock().unwrap().packets.push_back(ClientPacket::new(client_id, String::from_utf8(Vec::from(message)).unwrap()));
+					match bincode::deserialize(&buffer[..bytes_read]) {
+						Ok(packet) => shared_data.lock().unwrap().packets.push_back(packet),
+						Err(e) => eprintln!("failed to deserialize packet from client {client_id}: {e}", ),
+					}
 				}
 				Err(e) => {
 					eprintln!("failed to read stream from client {client_id}: {e}");
@@ -145,21 +168,19 @@ impl Server {
 		}
 	}
 
-	pub fn broadcast_all(&mut self, buf: &[u8]) -> Result<(), String> {
+	pub fn broadcast_all(&mut self, packet: &ServerPacket) -> Result<(), String> {
 		self.shared_data.lock()
 			.map_err(|e| e.to_string())?
-			.broadcast_all(buf)
-			.map_err(|e| e.to_string())?;
-		Ok(())
+			.broadcast_all(packet)
+			.map_err(|e| e.to_string())
 	}
 
 	/// if you want to broadcast to all clients, use `broadcast_all`
-	pub fn broadcast(&mut self, buf: &[u8], ignored_client: ClientId) -> Result<(), String> {
+	pub fn broadcast(&mut self, packet: &ServerPacket, ignored_client: ClientId) -> Result<(), String> {
 		self.shared_data.lock()
 			.map_err(|e| e.to_string())?
-			.broadcast(buf, ignored_client)
-			.map_err(|e| e.to_string())?;
-		Ok(())
+			.broadcast(packet, ignored_client)
+			.map_err(|e| e.to_string())
 	}
 
 	pub fn get_packet(&mut self) -> Option<ClientPacket> {
@@ -175,11 +196,19 @@ impl Server {
 		if let Ok(shared_data) = self.shared_data.lock() {
 			match shared_data.clients.get(&client_id) {
 				Some(client) => Some(client.stream.peer_addr().unwrap().to_string()),
-                None => None,
+				None => None,
 			}
 		}
 		else {
 			None
 		}
+	}
+
+	pub fn kick_client(&mut self, client_id: ClientId) {
+		if let Ok(mut shared_data) = self.shared_data.lock() {
+			let _ = shared_data.send(&ServerPacket::YouWereKicked, client_id);
+			shared_data.broadcast(&ServerPacket::ClientKicked(client_id), client_id).expect("failed to send notification to all other clients that one client got kicked");
+            shared_data.remove_client(client_id);
+        }
 	}
 }

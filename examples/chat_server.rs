@@ -1,45 +1,72 @@
-use client_server::server::Server;
+use client_server::{Server, ServerPacket, ClientMessage};
 use std::{collections::VecDeque, sync::{Arc, Mutex}};
 
 fn input_thread(input_commands: Arc<Mutex<VecDeque<String>>>) {
-    loop {
-        let mut input_str = String::new();
-        std::io::stdin().read_line(&mut input_str).expect("Failed to read line");
-        let input = input_str.trim();
-        input_commands.lock().unwrap().push_front(input.to_string());
+	loop {
+		let mut input_str = String::new();
+		std::io::stdin().read_line(&mut input_str).expect("Failed to read line");
+		let input = input_str.trim();
+		input_commands.lock().unwrap().push_front(input.to_string());
    }
 }
 
 fn main() {
-    let mut server = Server::bind_localhost(8080).expect("failed to bind server to 127.0.0.1:8080");
+	let mut server = Server::bind_localhost(8080).expect("failed to bind server to 127.0.0.1:8080");
 
-    let input_commands: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
-    let input_commands_clone = input_commands.clone();
-    std::thread::spawn(move || input_thread(input_commands_clone));
+	let input_commands: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+	let input_commands_clone = input_commands.clone();
+	std::thread::spawn(move || input_thread(input_commands_clone));
 
-    loop {
-        {
-            let mut input_commands = input_commands.lock().unwrap();
+	loop {
+		{
+			let mut input_commands = input_commands.lock().unwrap();
 
-            let mut exit = false;
-            while let Some(input) = input_commands.pop_back() {
-                if input == "/exit" {
-                    exit = true;
-                    break;
-                }                
-            
-                server.broadcast_all(format!("SERVER: {}", input).as_bytes()).expect("failed to write to all clients");
-            }
+			let mut exit = false;
+			while let Some(input) = input_commands.pop_back() {
+				if input == "/exit" {
+					exit = true;
+					break;
+				}
+				else if input.starts_with("/kick ") {
+                    if let Some(input) = input.split_whitespace().nth(1) {
+                        if let Ok(client_id) = input.parse() {
+							server.kick_client(client_id);
+						}
+						else {
+							eprintln!("client_id argument was not a number");
+						}
+                    }
+                    else {
+                        eprintln!("invalid command usage: /kick [client_id]");
+                    }
+				}
+				else {
+					server.broadcast_all(&ServerPacket::ServerToClientMessage(input)).expect("failed to write to all clients");
+				}			
+			}
 
-            if exit {
-                break;
-            }
-        }
+			if exit {
+				break;
+			}
+		}
 
-        if let Some(packet) = server.get_packet() {
-            let client_ip = server.get_client_ip_address(packet.sender).unwrap_or("unkown".to_string());
-            println!("{}: {}", client_ip, packet.data);
-            server.broadcast(format!("{client_ip}: {}", packet.data).as_bytes(), packet.sender).expect("failed to broadcast message to all clients");
-        }
-    }
+		if let Some(packet) = server.get_packet() {
+			let client_addres = server.get_client_ip_address(packet.author).unwrap_or("unkown".to_string());
+			match packet.message {
+				ClientMessage::Connected => {
+					println!("New client {}: {client_addres}", packet.author);
+					server.broadcast(&ServerPacket::ClientConnected(packet.author), packet.author).expect("Failed to send the other clients that a new client connected");
+				}
+				ClientMessage::ClientToClientMessage(message) => {
+					println!("{client_addres} [{}]: {message}", packet.author);
+					server.broadcast(&ServerPacket::ClientToClientMessage(packet.author, message), packet.author).expect("failed to broadcast message to all clients");
+				},
+				ClientMessage::Disconnected => {
+					println!("Client {} disconnected", packet.author);
+					server.broadcast(&ServerPacket::ClientDisconnected(packet.author), packet.author).expect("failed to broadcast that a client has disconnected to all the other clients");
+				}
+			}
+			
+		}
+	}
 }
