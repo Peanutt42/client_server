@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
-use crate::{ClientId, ClientPacket, ClientMessage, ServerPacket};
+use crate::{ClientId, MAX_MESSAGE_SIZE, ClientPacket, ClientMessage, ServerPacket};
 
 pub struct ClientData {
 	stream: TcpStream,
@@ -119,7 +119,7 @@ impl Server {
 	}
 
 	fn handle_client_thread(mut stream: TcpStream, shared_data: Arc<Mutex<SharedData>>) {
-		let mut buffer = [0; 512];
+		let mut buffer = [0; MAX_MESSAGE_SIZE];
 		let client_id: ClientId;
 
 		{

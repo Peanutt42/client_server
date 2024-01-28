@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::net::{ToSocketAddrs, TcpStream};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
-use crate::{ClientId, ClientMessage, ClientPacket, ServerPacket};
+use crate::{ClientId, MAX_MESSAGE_SIZE, ClientMessage, ClientPacket, ServerPacket};
 
 struct SharedData {
 	packets: VecDeque<ServerPacket>,
@@ -70,7 +70,7 @@ impl Client {
 	}
 
 	fn listen_thread(mut stream: TcpStream, shared_data: Arc<Mutex<SharedData>>) {
-		let mut buffer = [0; 512];
+		let mut buffer = [0; MAX_MESSAGE_SIZE];
 
 		loop {
 			match stream.read(&mut buffer) {
