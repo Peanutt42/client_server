@@ -125,8 +125,8 @@ impl Server {
 		{
 			let mut shared_data = shared_data.lock().unwrap();
 			client_id = shared_data.add_client(stream.try_clone().expect("Failed to clone stream"));
+			shared_data.packets.push_front(ClientPacket::new(client_id, ClientMessage::Connected));
 			shared_data.send(&ServerPacket::ConnectResponse(client_id), client_id).expect("failed to send the connect response to client");
-
 			shared_data.broadcast(&ServerPacket::ClientConnected(client_id), client_id)
 				.expect("failed to send 'ClientConnected' to all other clients");
 		}
@@ -135,13 +135,15 @@ impl Server {
 			match stream.read(&mut buffer) {
 				Ok(bytes_read) => {
 					if bytes_read == 0 {
-						shared_data.lock().unwrap().packets.push_back(ClientPacket::new(client_id, ClientMessage::Disconnected));
+						let mut shared_data = shared_data.lock().unwrap();
+						shared_data.packets.push_back(ClientPacket::new(client_id, ClientMessage::Disconnected));
+						shared_data.broadcast(&ServerPacket::ClientDisconnected(client_id), client_id).expect("failed to broadcast that a client has disconnected to all the other clients");
 						break;
 					}
 	
 					match bincode::deserialize(&buffer[..bytes_read]) {
 						Ok(packet) => shared_data.lock().unwrap().packets.push_back(packet),
-						Err(e) => eprintln!("failed to deserialize packet from client {client_id}: {e}", ),
+						Err(e) => eprintln!("failed to deserialize packet from client {client_id}: {e}"),
 					}
 				}
 				Err(e) => {

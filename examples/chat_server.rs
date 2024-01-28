@@ -55,7 +55,6 @@ fn main() {
 			match packet.message {
 				ClientMessage::Connected => {
 					println!("New client {}: {client_addres}", packet.author);
-					server.broadcast(&ServerPacket::ClientConnected(packet.author), packet.author).expect("Failed to send the other clients that a new client connected");
 				}
 				ClientMessage::ClientToClientMessage(message) => {
 					println!("{client_addres} [{}]: {message}", packet.author);
@@ -63,7 +62,6 @@ fn main() {
 				},
 				ClientMessage::Disconnected => {
 					println!("Client {} disconnected", packet.author);
-					server.broadcast(&ServerPacket::ClientDisconnected(packet.author), packet.author).expect("failed to broadcast that a client has disconnected to all the other clients");
 				}
 			}
 			
