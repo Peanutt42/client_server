@@ -97,7 +97,10 @@ impl Client {
 						Ok(packet) => {
 							let mut shared_data = shared_data.lock().unwrap();
 							match packet {
-								InternalServerPacket::ConnectResponse(client_id) => shared_data.id = Some(client_id),
+								InternalServerPacket::ConnectResponse(client_id) => {
+									shared_data.id = Some(client_id);
+									shared_data.packets.push_back(ServerPacket::ConnectedSuccessfully);
+								},
 								InternalServerPacket::NewClientConnected(client_id) => shared_data.packets.push_back(ServerPacket::NewClientConnected(client_id)),
 								InternalServerPacket::ClientDisconnected(client_id) => shared_data.packets.push_back(ServerPacket::ClientDisconnected(client_id)),
 								InternalServerPacket::ClientKicked(client_id) => shared_data.packets.push_back(ServerPacket::ClientKicked(client_id)),
