@@ -1,4 +1,4 @@
-use client_server::{Server, ServerPacket, ClientMessage};
+use client_server::{Server, ClientMessage};
 use std::{collections::VecDeque, sync::{Arc, Mutex}};
 
 fn input_thread(input_commands: Arc<Mutex<VecDeque<String>>>) {
@@ -41,7 +41,7 @@ fn main() {
                     }
 				}
 				else {
-					server.broadcast_all(&ServerPacket::ServerToClientMessage(input)).expect("failed to write to all clients");
+					server.broadcast_all(&Vec::from(input.as_bytes())).expect("failed to write to all clients");
 				}			
 			}
 
@@ -57,9 +57,11 @@ fn main() {
 					println!("New client {}: {client_addres}", packet.author);
 				}
 				ClientMessage::ClientToClientMessage(message) => {
-					println!("{client_addres} [{}]: {message}", packet.author);
-					server.broadcast(&ServerPacket::ClientToClientMessage(packet.author, message), packet.author).expect("failed to broadcast message to all clients");
+					println!("{client_addres} [{}]: {}", packet.author, String::from_utf8(message).unwrap());
 				},
+				ClientMessage::ClientToServerMessage(message) => {
+					println!("{client_addres} [{}] (only to server): {}", packet.author, String::from_utf8(message).unwrap());
+				}
 				ClientMessage::Disconnected => {
 					println!("Client {} disconnected", packet.author);
 				}

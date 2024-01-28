@@ -1,23 +1,22 @@
-use serde::{Serialize, Deserialize};
-
 pub mod client;
 pub use client::Client;
 pub mod server;
 pub use server::Server;
 
+mod internal;
+
 pub const MAX_MESSAGE_SIZE: usize = 1024;
 
 pub type ClientId = usize;
+pub type RawMessageData = Vec<u8>;
 
-#[derive(Serialize, Deserialize)]
 pub enum ClientMessage {
-	/// isn't sent by the client, but added internally when client connects
 	Connected,
-	ClientToClientMessage(String),
+	ClientToClientMessage(RawMessageData),
+	ClientToServerMessage(RawMessageData),
 	Disconnected,
 }
 
-#[derive(Serialize, Deserialize)]
 pub struct ClientPacket {
 	pub author: ClientId,
 	pub message: ClientMessage,
@@ -32,16 +31,15 @@ impl ClientPacket {
 	}
 }
 
-#[derive(Serialize, Deserialize)]
 pub enum ServerPacket {
-	ConnectResponse(ClientId),
-	ClientConnected(ClientId),
+	ConnectedSuccessfully,
+	NewClientConnected(ClientId),
 	ClientDisconnected(ClientId),
 	ClientKicked(ClientId),
 	YouWereKicked,
 	/// author, message
-	ClientToClientMessage(ClientId, String),
-	ServerToClientMessage(String),
+	ClientToClientMessage(ClientId, RawMessageData),
+	ServerToClientMessage(RawMessageData),
 	/// isn't sent from the server, but added internally when connection ends
 	Disconnected,
 }

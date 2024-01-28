@@ -1,4 +1,4 @@
-use client_server::{Client, ClientMessage, ServerPacket};
+use client_server::{Client, ServerPacket};
 use std::{collections::VecDeque, sync::{Arc, Mutex}};
 
 fn input_thread(messages_to_send: Arc<Mutex<VecDeque<String>>>) {
@@ -27,7 +27,12 @@ fn main() {
 					exit = true;
 					break;
 				}
-				client.send(ClientMessage::ClientToClientMessage(input)).expect("Failed to write to server");
+				if input.starts_with("/server ") {
+					client.send_to_server(&Vec::from(input.trim_start_matches("/server "))).expect("Failed to write to server");
+				}
+				else {
+					client.send_to_all(&Vec::from(input.as_bytes())).expect("Failed to write to all clients");
+				}
 			}
 
 			if exit {
@@ -38,8 +43,8 @@ fn main() {
 		let mut exit = false;
 		while let Some(packet) = client.get_packet() {
 			match packet {
-				ServerPacket::ConnectResponse(_client_id) => println!("Successfully connected to server"),
-				ServerPacket::ClientConnected(new_client_id) => println!("New client connected: {new_client_id}"),
+				ServerPacket::ConnectedSuccessfully => println!("Successfully connected to server"),
+				ServerPacket::NewClientConnected(new_client_id) => println!("New client connected: {new_client_id}"),
 				ServerPacket::ClientDisconnected(client_id) => println!("Client {client_id} disconnected"),
 				ServerPacket::ClientKicked(client_id) => println!("Client {client_id} was kicked"),
 				ServerPacket::YouWereKicked => {
@@ -47,8 +52,8 @@ fn main() {
 					exit = true;
 					break;
 				},
-				ServerPacket::ClientToClientMessage(client_id, message) => println!("{client_id}: {message}"),
-				ServerPacket::ServerToClientMessage(message) => println!("Server: {message}"),
+				ServerPacket::ClientToClientMessage(client_id, message) => println!("{client_id}: {}", String::from_utf8(message).unwrap()),
+				ServerPacket::ServerToClientMessage(message) => println!("Server: {}", String::from_utf8(message).unwrap()),
 				ServerPacket::Disconnected => {
 					println!("Server disconnected!");
 					exit = true;

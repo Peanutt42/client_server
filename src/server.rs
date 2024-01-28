@@ -2,7 +2,8 @@ use std::collections::{HashMap, VecDeque};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
-use crate::{ClientId, MAX_MESSAGE_SIZE, ClientPacket, ClientMessage, ServerPacket};
+use crate::{ClientId, RawMessageData, MAX_MESSAGE_SIZE, ClientPacket, ClientMessage};
+use crate::internal::{InternalClientPacket, InternalServerPacket};
 
 pub struct ClientData {
 	stream: TcpStream,
@@ -45,7 +46,7 @@ impl SharedData {
 		self.clients.remove(&client_id);
 	}
 
-	fn send(&mut self, packet: &ServerPacket, client_id: ClientId) -> io::Result<()> {
+	fn send(&mut self, packet: &InternalServerPacket, client_id: ClientId) -> io::Result<()> {
 		match bincode::serialize(packet) {
 			Ok(buffer) => {
 				match self.clients.get_mut(&client_id) {
@@ -57,7 +58,7 @@ impl SharedData {
 		}
 	}
 
-	fn broadcast_all(&mut self, packet: &ServerPacket) -> io::Result<()> {
+	fn broadcast_all(&mut self, packet: &InternalServerPacket) -> io::Result<()> {
 		match bincode::serialize(packet) {
 			Ok(buffer) => {
 				let mut error_msg = Ok(());
@@ -73,7 +74,7 @@ impl SharedData {
 	}
 
 	/// if you want to broadcast to all clients, use `broadcast_all`
-	fn broadcast(&mut self, packet: &ServerPacket, ignored_client: ClientId) -> io::Result<()> {
+	fn broadcast(&mut self, packet: &InternalServerPacket, ignored_client: ClientId) -> io::Result<()> {
 		match bincode::serialize(packet) {
 			Ok(buffer) => {
 				let mut error_msg = Ok(());
@@ -126,8 +127,8 @@ impl Server {
 			let mut shared_data = shared_data.lock().unwrap();
 			client_id = shared_data.add_client(stream.try_clone().expect("Failed to clone stream"));
 			shared_data.packets.push_front(ClientPacket::new(client_id, ClientMessage::Connected));
-			shared_data.send(&ServerPacket::ConnectResponse(client_id), client_id).expect("failed to send the connect response to client");
-			shared_data.broadcast(&ServerPacket::ClientConnected(client_id), client_id)
+			shared_data.send(&InternalServerPacket::ConnectResponse(client_id), client_id).expect("failed to send the connect response to client");
+			shared_data.broadcast(&InternalServerPacket::NewClientConnected(client_id), client_id)
 				.expect("failed to send 'ClientConnected' to all other clients");
 		}
 
@@ -137,12 +138,31 @@ impl Server {
 					if bytes_read == 0 {
 						let mut shared_data = shared_data.lock().unwrap();
 						shared_data.packets.push_back(ClientPacket::new(client_id, ClientMessage::Disconnected));
-						shared_data.broadcast(&ServerPacket::ClientDisconnected(client_id), client_id).expect("failed to broadcast that a client has disconnected to all the other clients");
+						shared_data.broadcast(&InternalServerPacket::ClientDisconnected(client_id), client_id).expect("failed to broadcast that a client has disconnected to all the other clients");
 						break;
 					}
 	
 					match bincode::deserialize(&buffer[..bytes_read]) {
-						Ok(packet) => shared_data.lock().unwrap().packets.push_back(packet),
+						Ok(packet) => {
+							let mut shared_data = shared_data.lock().unwrap();
+							match packet {
+								InternalClientPacket::BroadcastMessage(message) => {
+									shared_data.packets.push_back(ClientPacket::new(client_id, ClientMessage::ClientToClientMessage(message.clone())));
+									if let Err(e) = shared_data.broadcast(&InternalServerPacket::ClientToClient(client_id, message), client_id) {
+										eprintln!("failed to broadcast a client message to the other clients: {e}");
+									}
+								},
+								InternalClientPacket::PersonalMessage(target_client_id, message) => {
+									shared_data.packets.push_back(ClientPacket::new(client_id, ClientMessage::ClientToClientMessage(message.clone())));
+                                    if let Err(e) = shared_data.send(&InternalServerPacket::ClientToClient(client_id, message), target_client_id) {
+										eprintln!("failed to redirect a personal client message to another client: {e}");
+									}
+								},
+								InternalClientPacket::ServerMessage(message) => {
+                                    shared_data.packets.push_back(ClientPacket::new(client_id, ClientMessage::ClientToServerMessage(message)));
+                                },
+							};
+						},
 						Err(e) => eprintln!("failed to deserialize packet from client {client_id}: {e}"),
 					}
 				}
@@ -170,18 +190,18 @@ impl Server {
 		}
 	}
 
-	pub fn broadcast_all(&mut self, packet: &ServerPacket) -> Result<(), String> {
+	pub fn broadcast_all(&mut self, message: &RawMessageData) -> Result<(), String> {
 		self.shared_data.lock()
 			.map_err(|e| e.to_string())?
-			.broadcast_all(packet)
+			.broadcast_all(&InternalServerPacket::ServerToClient(message.clone()))
 			.map_err(|e| e.to_string())
 	}
 
 	/// if you want to broadcast to all clients, use `broadcast_all`
-	pub fn broadcast(&mut self, packet: &ServerPacket, ignored_client: ClientId) -> Result<(), String> {
+	pub fn broadcast(&mut self, message: &RawMessageData, ignored_client: ClientId) -> Result<(), String> {
 		self.shared_data.lock()
 			.map_err(|e| e.to_string())?
-			.broadcast(packet, ignored_client)
+			.broadcast(&InternalServerPacket::ServerToClient(message.clone()), ignored_client)
 			.map_err(|e| e.to_string())
 	}
 
@@ -208,8 +228,8 @@ impl Server {
 
 	pub fn kick_client(&mut self, client_id: ClientId) {
 		if let Ok(mut shared_data) = self.shared_data.lock() {
-			let _ = shared_data.send(&ServerPacket::YouWereKicked, client_id);
-			shared_data.broadcast(&ServerPacket::ClientKicked(client_id), client_id).expect("failed to send notification to all other clients that one client got kicked");
+			let _ = shared_data.send(&InternalServerPacket::YouWereKicked, client_id);
+			shared_data.broadcast(&InternalServerPacket::ClientKicked(client_id), client_id).expect("failed to send notification to all other clients that one client got kicked");
             shared_data.remove_client(client_id);
         }
 	}

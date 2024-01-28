@@ -2,7 +2,8 @@ use std::collections::VecDeque;
 use std::net::{ToSocketAddrs, TcpStream};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
-use crate::{ClientId, MAX_MESSAGE_SIZE, ClientMessage, ClientPacket, ServerPacket};
+use crate::{ClientId, RawMessageData, ServerPacket, MAX_MESSAGE_SIZE};
+use crate::internal::{InternalClientPacket, InternalServerPacket};
 
 struct SharedData {
 	packets: VecDeque<ServerPacket>,
@@ -13,7 +14,7 @@ impl SharedData {
 	fn new() -> Self {
 		Self {
 			packets: VecDeque::new(),
-            id: None,
+			id: None,
 		}
 	}
 }
@@ -47,17 +48,21 @@ impl Client {
 		Self::connect(("127.0.0.1", port))
 	}
 
-	pub fn send(&mut self, message: ClientMessage) -> io::Result<()> {
-		match self.shared_data.lock().unwrap().id {
-			Some(my_client_id) => {
-				let packet = ClientPacket::new(my_client_id, message);
-				match bincode::serialize(&packet) {
-					Ok(buffer) => self.send_stream.write_all(buffer.as_slice()),
-					Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
-				}
-			},
-			None => Err(io::Error::new(io::ErrorKind::Other, "ClientId not set, we are not connected to the server!".to_string())),
+	fn send_packet(&mut self, packet: &InternalClientPacket) -> io::Result<()> {
+		match bincode::serialize(&packet) {
+			Ok(buffer) => self.send_stream.write_all(buffer.as_slice()),
+			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
 		}
+	}
+
+	pub fn send_to(&mut self, client_to_send_to: ClientId, message: &RawMessageData) -> io::Result<()> {
+		self.send_packet(&InternalClientPacket::PersonalMessage(client_to_send_to, message.clone()))
+	}
+	pub fn send_to_all(&mut self, message: &RawMessageData) -> io::Result<()> {
+		self.send_packet(&InternalClientPacket::BroadcastMessage(message.clone()))
+	}
+	pub fn send_to_server(&mut self, message: &RawMessageData) -> io::Result<()> {
+		self.send_packet(&InternalClientPacket::ServerMessage(message.clone()))
 	}
 
 	pub fn get_packet(&mut self) -> Option<ServerPacket> {
@@ -83,10 +88,15 @@ impl Client {
 					match bincode::deserialize(&buffer[..bytes_read]) {
 						Ok(packet) => {
 							let mut shared_data = shared_data.lock().unwrap();
-							if let ServerPacket::ConnectResponse(client_id) = &packet {
-								shared_data.id = Some(*client_id);
+							match packet {
+								InternalServerPacket::ConnectResponse(client_id) => shared_data.id = Some(client_id),
+								InternalServerPacket::NewClientConnected(client_id) => shared_data.packets.push_back(ServerPacket::NewClientConnected(client_id)),
+								InternalServerPacket::ClientDisconnected(client_id) => shared_data.packets.push_back(ServerPacket::ClientDisconnected(client_id)),
+								InternalServerPacket::ClientKicked(client_id) => shared_data.packets.push_back(ServerPacket::ClientKicked(client_id)),
+								InternalServerPacket::YouWereKicked => shared_data.packets.push_back(ServerPacket::YouWereKicked),
+								InternalServerPacket::ClientToClient(client_id, message) => shared_data.packets.push_back(ServerPacket::ClientToClientMessage(client_id, message)),
+								InternalServerPacket::ServerToClient(message) => shared_data.packets.push_back(ServerPacket::ServerToClientMessage(message)),
 							}
-							shared_data.packets.push_back(packet)
 						},
 						Err(e) => eprintln!("Failed to parse server packet: {e}"),
 					}
