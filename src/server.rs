@@ -46,6 +46,12 @@ impl SharedData {
 		self.clients.remove(&client_id);
 	}
 
+	fn client_disconnected(&mut self, client_id: ClientId) {
+		self.packets.push_back(ClientPacket::new(client_id, ClientMessage::Disconnected));
+		self.broadcast(&InternalServerPacket::ClientDisconnected(client_id), client_id).expect("failed to broadcast that a client has disconnected to all the other clients");
+		self.remove_client(client_id);
+	}
+
 	fn send(&mut self, packet: &InternalServerPacket, client_id: ClientId) -> io::Result<()> {
 		match bincode::serialize(packet) {
 			Ok(buffer) => {
@@ -136,9 +142,6 @@ impl Server {
 			match stream.read(&mut buffer) {
 				Ok(bytes_read) => {
 					if bytes_read == 0 {
-						let mut shared_data = shared_data.lock().unwrap();
-						shared_data.packets.push_back(ClientPacket::new(client_id, ClientMessage::Disconnected));
-						shared_data.broadcast(&InternalServerPacket::ClientDisconnected(client_id), client_id).expect("failed to broadcast that a client has disconnected to all the other clients");
 						break;
 					}
 	
@@ -167,13 +170,15 @@ impl Server {
 					}
 				}
 				Err(e) => {
-					eprintln!("failed to read stream from client {client_id}: {e}");
+					match e.kind() {
+						io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted => {},
+						_ => eprintln!("failed to read stream from client {client_id}: {e}"),
+					}
 					break;
 				}
 			}
 		}
-	
-		shared_data.lock().unwrap().remove_client(client_id);
+		shared_data.lock().unwrap().client_disconnected(client_id);
 	}
 
 	fn listen_thread(listener: TcpListener, shared_data: Arc<Mutex<SharedData>>) {

@@ -17,6 +17,14 @@ impl SharedData {
 			id: None,
 		}
 	}
+
+	fn server_disconnected(&mut self) {
+		self.packets.push_back(ServerPacket::Disconnected);
+	}
+
+	fn server_refused(&mut self) {
+		self.packets.push_back(ServerPacket::ConnectionRefused);
+	}
 }
 
 pub struct Client {
@@ -81,7 +89,7 @@ impl Client {
 			match stream.read(&mut buffer) {
 				Ok(bytes_read) => {
 					if bytes_read == 0 {
-						shared_data.lock().unwrap().packets.push_back(ServerPacket::Disconnected);
+						shared_data.lock().unwrap().server_disconnected();
 						break;
 					}
 	
@@ -102,7 +110,17 @@ impl Client {
 					}
 				}
 				Err(e) => {
-					eprintln!("failed to read from server: {e}");
+					match e.kind() {
+						io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionReset => {
+							shared_data.lock().unwrap().server_disconnected();
+							break;
+						},
+						io::ErrorKind::ConnectionRefused => {
+							shared_data.lock().unwrap().server_refused();
+							break;
+						}
+						_ => eprintln!("failed to read from server: {e}"),
+					}
 					break;
 				}
 			}

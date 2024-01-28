@@ -59,6 +59,11 @@ fn main() {
 					exit = true;
 					break;
 				},
+				ServerPacket::ConnectionRefused => {
+					println!("Server refused connection!");
+					exit = true;
+					break;
+				},
 			}
 		}
 

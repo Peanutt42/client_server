@@ -40,6 +40,6 @@ pub enum ServerPacket {
 	/// author, message
 	ClientToClientMessage(ClientId, RawMessageData),
 	ServerToClientMessage(RawMessageData),
-	/// isn't sent from the server, but added internally when connection ends
 	Disconnected,
+	ConnectionRefused,
 }
