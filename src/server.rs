@@ -166,13 +166,24 @@ impl Server {
                                 },
 							};
 						},
+						Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => (),
 						Err(e) => eprintln!("failed to deserialize packet from client {client_id}: {e}"),
 					}
 				}
 				Err(e) => {
 					match e.kind() {
 						io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted => {},
-						_ => eprintln!("failed to read stream from client {client_id}: {e}"),
+						_ => {
+							if let Some(code) = e.raw_os_error() {
+								// (only caused on windows on shutdown)
+								// error message: "Either the application has not called WSAStartup, or WSAStartup failed. (os error 10093)"
+								// i could not find a fix for this, it doesn't seem to matter that much
+								if code == 10093 {
+									break;
+								}
+							}
+							eprintln!("failed to read stream from client {client_id}: {e}")
+						},
 					}
 					break;
 				}
@@ -182,13 +193,23 @@ impl Server {
 	}
 
 	fn listen_thread(listener: TcpListener, shared_data: Arc<Mutex<SharedData>>) {
+		listener.set_nonblocking(true).expect("failed to set nonblocking");
 		for stream in listener.incoming() {
 			match stream {
 				Ok(stream) => {
 					let shared_data_clone = shared_data.clone();
 					std::thread::spawn(move || Self::handle_client_thread(stream, shared_data_clone));
 				},
+				Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => (),
 				Err(e) => {
+					if let Some(code) = e.raw_os_error() {
+						// (only caused on windows on shutdown)
+						// error message: "Either the application has not called WSAStartup, or WSAStartup failed. (os error 10093)"
+						// i could not find a fix for this, it doesn't seem to matter that much
+						if code == 10093 {
+							break;
+						}
+					}
 					eprintln!("error accepting connection: {e}");
 				}
 			}
