@@ -166,25 +166,20 @@ impl Server {
                                 },
 							};
 						},
-						Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => (),
 						Err(e) => eprintln!("failed to deserialize packet from client {client_id}: {e}"),
 					}
 				}
+				Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::ConnectionReset || e.kind() == io::ErrorKind::ConnectionAborted => (),
 				Err(e) => {
-					match e.kind() {
-						io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted => {},
-						_ => {
-							if let Some(code) = e.raw_os_error() {
-								// (only caused on windows on shutdown)
-								// error message: "Either the application has not called WSAStartup, or WSAStartup failed. (os error 10093)"
-								// i could not find a fix for this, it doesn't seem to matter that much
-								if code == 10093 {
-									break;
-								}
-							}
-							eprintln!("failed to read stream from client {client_id}: {e}")
-						},
+					if let Some(code) = e.raw_os_error() {
+						// (only caused on windows on shutdown)
+						// error message: "Either the application has not called WSAStartup, or WSAStartup failed. (os error 10093)"
+						// i could not find a fix for this, it doesn't seem to matter that much
+						if code == 10093 {
+							break;
+						}
 					}
+					eprintln!("failed to read stream from client {client_id}: {e}");
 					break;
 				}
 			}
