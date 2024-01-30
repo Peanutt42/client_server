@@ -1,9 +1,9 @@
 use custom_error::custom_error;
-use std::net::{TcpListener, ToSocketAddrs};
 use std::io::{self};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, Duration};
 use crate::{ClientId, RawMessageData, ClientPacket};
+use crate::protocol::NetworkingListener;
 use crate::server_impl::SharedData;
 use crate::internal::InternalServerPacket;
 
@@ -25,7 +25,7 @@ pub struct Server {
 }
 
 impl Server {
-	pub fn new(listener: TcpListener) -> Self {
+	pub fn new(listener: NetworkingListener) -> Self {
 		let shared_data = Arc::new(Mutex::new(SharedData::new()));
 		
 		let shared_data_clone = shared_data.clone();
@@ -36,15 +36,15 @@ impl Server {
 		}
 	}
 
-	pub fn bind<A>(addr: A) -> io::Result<Self> 
-	where A: ToSocketAddrs
+	pub fn bind_tcp<A>(addr: A) -> io::Result<Self>
+	where A: std::net::ToSocketAddrs
 	{
-		let listener = TcpListener::bind(addr)?;
+		let listener = NetworkingListener::Tcp(std::net::TcpListener::bind(addr)?);
 		Ok(Self::new(listener))
 	}
 
-	pub fn bind_localhost(port: u16) -> io::Result<Self> {
-		Self::bind(("127.0.0.1", port))
+	pub fn bind_localhost_tcp(port: u16) -> io::Result<Self> {
+		Self::bind_tcp(("127.0.0.1", port))
 	}
 
 	pub fn broadcast_all(&mut self, message: &RawMessageData) -> Result<()> {

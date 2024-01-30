@@ -1,8 +1,8 @@
-use std::net::{ToSocketAddrs, TcpStream};
 use std::io::{self};
 use std::sync::{Arc, Mutex};
 use custom_error::custom_error;
 use crate::{ClientId, RawMessageData, ServerPacket};
+use crate::protocol::NetworkingStream;
 use crate::client_impl::SharedData;
 use crate::internal::InternalClientPacket;
 
@@ -20,26 +20,26 @@ pub struct Client {
 }
 
 impl Client {
-	pub fn new(listen_stream: TcpStream, send_stream: TcpStream) -> Self {
+	pub fn new(listen_stream: NetworkingStream, send_stream: NetworkingStream) -> Self {
 		let shared_data = Arc::new(Mutex::new(SharedData::new(send_stream)));
 		let shared_data_clone = shared_data.clone();
-		std::thread::spawn(move || Self::listen_thread(listen_stream, shared_data_clone));
+		std::thread::spawn(|| Self::listen_thread(listen_stream, shared_data_clone));
 
 		Self {
 			shared_data,
 		}
 	}
 
-	pub fn connect<A>(ip_address: A) -> io::Result<Self>
-		where A: ToSocketAddrs
+	pub fn connect_tcp<A>(ip_address: A) -> io::Result<Self>
+		where A: std::net::ToSocketAddrs
 	{
-		let listen_stream = TcpStream::connect(ip_address)?;
+		let listen_stream = std::net::TcpStream::connect(ip_address)?;
 		let send_stream = listen_stream.try_clone()?;
-		Ok(Self::new(listen_stream, send_stream))
+		Ok(Self::new(NetworkingStream::Tcp(listen_stream), NetworkingStream::Tcp(send_stream)))
 	}
 
-	pub fn connect_localhost(port: u16) -> io::Result<Self> {
-		Self::connect(("127.0.0.1", port))
+	pub fn connect_localhost_tcp(port: u16) -> io::Result<Self> {
+		Self::connect_tcp(("127.0.0.1", port))
 	}
 
 	pub fn send_to(&mut self, client_to_send_to: ClientId, message: &RawMessageData) -> Result<()> {

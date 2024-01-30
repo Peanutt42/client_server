@@ -11,7 +11,7 @@ fn input_thread(input_commands: Arc<Mutex<VecDeque<String>>>) {
 }
 
 fn main() {
-	let mut server = Server::bind("0.0.0.0:8080").expect("failed to bind server to 0.0.0.0:8080");
+	let mut server = Server::bind_tcp("0.0.0.0:8080").expect("failed to bind server to 0.0.0.0:8080");
 
 	let input_commands: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
 	let input_commands_clone = input_commands.clone();

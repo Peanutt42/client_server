@@ -6,6 +6,8 @@ pub mod server;
 pub use server::Server;
 mod server_impl;
 
+pub mod protocol;
+
 mod internal;
 
 pub const MAX_MESSAGE_SIZE: usize = 1024;

@@ -1,21 +1,21 @@
-use std::net::TcpStream;
 use std::collections::VecDeque;
-use std::io::{self, Write, Read};
+use std::io;
 use std::sync::{Arc, Mutex};
+use crate::protocol::NetworkingStream;
 use crate::{MAX_MESSAGE_SIZE, ClientId, ServerPacket};
 use crate::internal::{InternalClientPacket, InternalServerPacket};
 use crate::client::{Client, Error, Result};
 
 
 pub struct SharedData {
-	pub send_stream: TcpStream,
+	pub send_stream: NetworkingStream,
 	pub packets: VecDeque<ServerPacket>,
 	pub id: Option<ClientId>,
 	pub error_log: Vec<Error>,
 }
 
 impl SharedData {
-	pub fn new(send_stream: TcpStream) -> Self {
+	pub fn new(send_stream: NetworkingStream) -> Self {
 		Self {
 			send_stream,
 			packets: VecDeque::new(),
@@ -35,7 +35,7 @@ impl SharedData {
 	pub fn send_packet(&mut self, packet: &InternalClientPacket) -> Result<()> {
 		match bincode::serialize(&packet) {
 			Ok(buffer) => {
-				if let Err(e) = self.send_stream.write_all(buffer.as_slice()) {
+				if let Err(e) = self.send_stream.write(buffer.as_slice()) {
 					Err(Error::SendError { io_error: e })
 				}
 				else {
@@ -48,7 +48,7 @@ impl SharedData {
 }
 
 impl Client {
-	pub fn listen_thread(mut stream: TcpStream, shared_data: Arc<Mutex<SharedData>>) {
+	pub fn listen_thread(mut stream: NetworkingStream, shared_data: Arc<Mutex<SharedData>>) {
 		let mut buffer = [0; MAX_MESSAGE_SIZE];
 
 		loop {

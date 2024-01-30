@@ -3,7 +3,7 @@ use std::time::Duration;
 use client_server::{Server, ClientMessage};
 
 fn main() {
-	let mut server = Server::bind("0.0.0.0:8080").expect("failed to bind server to 0.0.0.0:8080");
+	let mut server = Server::bind_tcp("0.0.0.0:8080").expect("failed to bind server to 0.0.0.0:8080");
 
 	server.set_ping_interval(Duration::from_secs(1));
 

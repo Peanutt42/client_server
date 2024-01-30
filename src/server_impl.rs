@@ -1,20 +1,20 @@
-use std::net::{TcpListener, TcpStream};
 use std::collections::{HashMap, VecDeque};
-use std::io::{self, Read, Write};
+use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, Duration};
 use crate::{ClientId, MAX_MESSAGE_SIZE, ClientPacket, ClientMessage};
+use crate::protocol::{NetworkingListener, NetworkingStream};
 use crate::server::{Server, Error, Result};
 use crate::internal::{InternalClientPacket, InternalServerPacket};
 
 pub struct ClientData {
-	pub stream: TcpStream,
+	pub stream: NetworkingStream,
 	pub ping_send_time: Option<Instant>,
 	pub last_ping: Option<Duration>,
 }
 
 impl ClientData {
-	pub fn new(stream: TcpStream) -> Self {
+	pub fn new(stream: NetworkingStream) -> Self {
 		Self {
 			stream,
 			ping_send_time: None,
@@ -45,7 +45,7 @@ impl SharedData {
 		}
 	}
 
-	pub fn add_client(&mut self, stream: TcpStream) -> ClientId {
+	pub fn add_client(&mut self, stream: NetworkingStream) -> ClientId {
 		let client_id = self.next_id;
 		self.next_id += 1;
 
@@ -64,10 +64,10 @@ impl SharedData {
 		self.remove_client(client_id);
 	}
 
-	pub fn stream_send(packet: &InternalServerPacket, stream: &mut TcpStream, client_id: ClientId) -> Result<()> {
+	pub fn stream_send(packet: &InternalServerPacket, stream: &mut NetworkingStream, client_id: ClientId) -> Result<()> {
 		match bincode::serialize(packet) {
 			Ok(buffer) => {
-				if let Err(e) = stream.write_all(buffer.as_slice()) {
+				if let Err(e) = stream.write(buffer.as_slice()) {
 					Err(Error::SendError { client_id, io_error: e })
 				}
 				else {
@@ -83,7 +83,7 @@ impl SharedData {
 			Ok(buffer) => {
 				match self.clients.get_mut(&client_id) {
 					Some(client) => {
-						if let Err(e) = client.stream.write_all(buffer.as_slice()) {
+						if let Err(e) = client.stream.write(buffer.as_slice()) {
 							Err(Error::SendError { client_id, io_error: e })
 						}
 						else {
@@ -102,7 +102,7 @@ impl SharedData {
 			Ok(buffer) => {
 				let mut error_msg = Ok(());
 				for (client_id, client) in self.clients.iter_mut() {
-					if let Err(e) = client.stream.write_all(buffer.as_slice()) {
+					if let Err(e) = client.stream.write(buffer.as_slice()) {
 						error_msg = Err(Error::SendError { client_id: *client_id, io_error: e });
 					}
 				}
@@ -119,7 +119,7 @@ impl SharedData {
 				let mut error_msg = Ok(());
 				for (client_id, client) in self.clients.iter_mut() {
 					if *client_id != ignored_client {
-						if let Err(e) = client.stream.write_all(buffer.as_slice()) {
+						if let Err(e) = client.stream.write(buffer.as_slice()) {
 							error_msg = Err(Error::SendError { client_id: *client_id, io_error: e });
 						}
 					}
@@ -139,7 +139,7 @@ impl Default for SharedData {
 
 
 impl Server {
-	pub fn listen_thread(listener: TcpListener, shared_data: Arc<Mutex<SharedData>>) {
+	pub fn listen_thread(mut listener: NetworkingListener, shared_data: Arc<Mutex<SharedData>>) {
 		listener.set_nonblocking(true).expect("failed to set nonblocking");
 		for stream in listener.incoming() {
 			match stream {
@@ -163,7 +163,7 @@ impl Server {
 		}
 	}
 
-	pub fn handle_client_thread(mut stream: TcpStream, shared_data: Arc<Mutex<SharedData>>) {
+	pub fn handle_client_thread(mut stream: NetworkingStream, shared_data: Arc<Mutex<SharedData>>) {
 		let mut buffer = [0; MAX_MESSAGE_SIZE];
 		let client_id: ClientId;
 
