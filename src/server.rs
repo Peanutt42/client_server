@@ -1,117 +1,10 @@
-use std::collections::{HashMap, VecDeque};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
-use std::io::{self, Read, Write};
+use std::net::{TcpListener, ToSocketAddrs};
+use std::io::{self};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, Duration};
-use crate::{ClientId, RawMessageData, MAX_MESSAGE_SIZE, ClientPacket, ClientMessage};
-use crate::internal::{InternalClientPacket, InternalServerPacket};
-
-pub struct ClientData {
-	stream: TcpStream,
-	ping_send_time: Option<Instant>,
-	last_ping: Option<Duration>,
-}
-
-impl ClientData {
-	fn new(stream: TcpStream) -> Self {
-		Self {
-			stream,
-			ping_send_time: None,
-			last_ping: None,
-		}
-	}
-}
-
-pub struct SharedData {
-	clients: HashMap<ClientId, ClientData>,
-	next_id: ClientId,
-
-	ping_interval: Option<Duration>,
-
-	packets: VecDeque<ClientPacket>,
-}
-
-impl SharedData {
-	fn new() -> Self {
-		Self {
-			clients: HashMap::new(),
-			next_id: 0,
-			ping_interval: None,
-			packets: VecDeque::new(),
-		}
-	}
-
-	fn add_client(&mut self, stream: TcpStream) -> ClientId {
-		let client_id = self.next_id;
-		self.next_id += 1;
-
-		self.clients.insert(client_id, ClientData::new(stream));
-
-		client_id
-	}
-
-	fn remove_client(&mut self, client_id: ClientId) {
-		self.clients.remove(&client_id);
-	}
-
-	fn client_disconnected(&mut self, client_id: ClientId) {
-		self.packets.push_back(ClientPacket::new(client_id, ClientMessage::Disconnected));
-		self.broadcast(&InternalServerPacket::ClientDisconnected(client_id), client_id).expect("failed to broadcast that a client has disconnected to all the other clients");
-		self.remove_client(client_id);
-	}
-
-	fn stream_send(packet: &InternalServerPacket, stream: &mut TcpStream) -> io::Result<()> {
-		match bincode::serialize(packet) {
-			Ok(buffer) => stream.write_all(buffer.as_slice()),
-			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
-		}
-	}
-
-	fn send(&mut self, packet: &InternalServerPacket, client_id: ClientId) -> io::Result<()> {
-		match bincode::serialize(packet) {
-			Ok(buffer) => {
-				match self.clients.get_mut(&client_id) {
-					Some(client) => client.stream.write_all(buffer.as_slice()),
-					None => Err(io::Error::new(io::ErrorKind::Other, "Client id doesn't exist")),
-				}
-			},
-			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
-		}
-	}
-
-	fn broadcast_all(&mut self, packet: &InternalServerPacket) -> io::Result<()> {
-		match bincode::serialize(packet) {
-			Ok(buffer) => {
-				let mut error_msg = Ok(());
-				for (_client_id, client) in self.clients.iter_mut() {
-					if let Err(e) = client.stream.write_all(buffer.as_slice()) {
-						error_msg = Err(e);
-					}
-				}
-				error_msg
-			},
-			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
-		}
-	}
-
-	/// if you want to broadcast to all clients, use `broadcast_all`
-	fn broadcast(&mut self, packet: &InternalServerPacket, ignored_client: ClientId) -> io::Result<()> {
-		match bincode::serialize(packet) {
-			Ok(buffer) => {
-				let mut error_msg = Ok(());
-				for (client_id, client) in self.clients.iter_mut() {
-					if *client_id != ignored_client {
-						if let Err(e) = client.stream.write_all(buffer.as_slice()) {
-							error_msg = Err(e);
-						}
-					}
-				}
-				error_msg
-			},
-			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
-		}
-	}
-}
+use crate::{ClientId, RawMessageData, ClientPacket};
+use crate::server_impl::SharedData;
+use crate::internal::InternalServerPacket;
 
 pub struct Server {
 	shared_data: Arc<Mutex<SharedData>>,
@@ -138,100 +31,6 @@ impl Server {
 
 	pub fn bind_localhost(port: u16) -> io::Result<Self> {
 		Self::bind(("127.0.0.1", port))
-	}
-
-	fn handle_client_thread(mut stream: TcpStream, shared_data: Arc<Mutex<SharedData>>) {
-		let mut buffer = [0; MAX_MESSAGE_SIZE];
-		let client_id: ClientId;
-
-		{
-			let mut shared_data = shared_data.lock().unwrap();
-			client_id = shared_data.add_client(stream.try_clone().expect("Failed to clone stream"));
-			shared_data.packets.push_front(ClientPacket::new(client_id, ClientMessage::Connected));
-			shared_data.send(&InternalServerPacket::ConnectResponse(client_id), client_id).expect("failed to send the connect response to client");
-			shared_data.broadcast(&InternalServerPacket::NewClientConnected(client_id), client_id)
-				.expect("failed to send 'ClientConnected' to all other clients");
-		}
-
-		loop {
-			match stream.read(&mut buffer) {
-				Ok(bytes_read) => {
-					if bytes_read == 0 {
-						break;
-					}
-	
-					match bincode::deserialize(&buffer[..bytes_read]) {
-						Ok(packet) => {
-							let mut shared_data = shared_data.lock().unwrap();
-							match packet {
-								InternalClientPacket::BroadcastMessage(message) => {
-									shared_data.packets.push_back(ClientPacket::new(client_id, ClientMessage::ClientToClientMessage(message.clone())));
-									if let Err(e) = shared_data.broadcast(&InternalServerPacket::ClientToClient(client_id, message), client_id) {
-										eprintln!("failed to broadcast a client message to the other clients: {e}");
-									}
-								},
-								InternalClientPacket::PersonalMessage(target_client_id, message) => {
-									shared_data.packets.push_back(ClientPacket::new(client_id, ClientMessage::ClientToClientMessage(message.clone())));
-                                    if let Err(e) = shared_data.send(&InternalServerPacket::ClientToClient(client_id, message), target_client_id) {
-										eprintln!("failed to redirect a personal client message to another client: {e}");
-									}
-								},
-								InternalClientPacket::ServerMessage(message) => {
-                                    shared_data.packets.push_back(ClientPacket::new(client_id, ClientMessage::ClientToServerMessage(message)));
-                                },
-								InternalClientPacket::PingRespone => {
-									if let Some(client) = shared_data.clients.get_mut(&client_id) {
-										if let Some(ping_send_time) = client.ping_send_time {
-											let round_trip_time = Instant::now() - ping_send_time;
-											client.last_ping = Some(round_trip_time.div_f32(2.0));
-										}
-									}
-								}
-							};
-						},
-						Err(e) => eprintln!("failed to deserialize packet from client {client_id}: {e}"),
-					}
-				}
-				Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::ConnectionReset || e.kind() == io::ErrorKind::ConnectionAborted => (),
-				Err(e) => {
-					if let Some(code) = e.raw_os_error() {
-						// (only caused on windows on shutdown)
-						// error message: "Either the application has not called WSAStartup, or WSAStartup failed. (os error 10093)"
-						// i could not find a fix for this, it doesn't seem to matter that much
-						if code == 10093 {
-							break;
-						}
-					}
-					eprintln!("failed to read stream from client {client_id}: {e}");
-					break;
-				}
-			}
-		}
-		shared_data.lock().unwrap().client_disconnected(client_id);
-	}
-
-	fn listen_thread(listener: TcpListener, shared_data: Arc<Mutex<SharedData>>) {
-		listener.set_nonblocking(true).expect("failed to set nonblocking");
-		for stream in listener.incoming() {
-			match stream {
-				Ok(stream) => {
-					let shared_data_clone = shared_data.clone();
-					std::thread::spawn(move || Self::handle_client_thread(stream, shared_data_clone));
-				},
-				Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => (),
-				Err(e) => {
-					if let Some(code) = e.raw_os_error() {
-						// (only caused on windows on shutdown)
-						// error message: "Either the application has not called WSAStartup, or WSAStartup failed. (os error 10093)"
-						// i could not find a fix for this, it doesn't seem to matter that much
-						if code == 10093 {
-							break;
-						}
-					}
-					eprintln!("error accepting connection: {e}");
-				}
-			}
-		}
 	}
 
 	pub fn broadcast_all(&mut self, message: &RawMessageData) -> Result<(), String> {
@@ -287,7 +86,7 @@ impl Server {
 	}
 
 	pub fn get_clients(&self) -> Vec<ClientId> {
-		self.shared_data.lock().unwrap().clients.keys().map(|client_id| *client_id).collect()
+		self.shared_data.lock().unwrap().clients.keys().copied().collect()
 	}
 
 	pub fn get_ping_interval(&self) -> Option<Duration> {
@@ -320,10 +119,7 @@ impl Server {
 
 	pub fn get_client_ip_address(&self, client_id: ClientId) -> Option<String> {
 		if let Ok(shared_data) = self.shared_data.lock() {
-			match shared_data.clients.get(&client_id) {
-				Some(client) => Some(client.stream.peer_addr().unwrap().to_string()),
-				None => None,
-			}
+			shared_data.clients.get(&client_id).map(|client| client.stream.peer_addr().unwrap().to_string())
 		}
 		else {
 			None
