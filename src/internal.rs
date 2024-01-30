@@ -1,5 +1,5 @@
-use serde::{Serialize, Deserialize};
 use crate::{ClientId, RawMessageData};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub enum InternalClientPacket {

@@ -16,35 +16,32 @@ pub type ClientId = usize;
 pub type RawMessageData = Vec<u8>;
 
 pub enum ClientMessage {
-	Connected,
-	ClientToClientMessage(RawMessageData),
-	ClientToServerMessage(RawMessageData),
-	Disconnected,
+    Connected,
+    ClientToClientMessage(RawMessageData),
+    ClientToServerMessage(RawMessageData),
+    Disconnected,
 }
 
 pub struct ClientPacket {
-	pub author: ClientId,
-	pub message: ClientMessage,
+    pub author: ClientId,
+    pub message: ClientMessage,
 }
 
 impl ClientPacket {
-	pub fn new(author: ClientId, message: ClientMessage) -> Self {
-		Self {
-            author,
-            message,
-        }
-	}
+    pub fn new(author: ClientId, message: ClientMessage) -> Self {
+        Self { author, message }
+    }
 }
 
 pub enum ServerPacket {
-	ConnectedSuccessfully,
-	NewClientConnected(ClientId),
-	ClientDisconnected(ClientId),
-	ClientKicked(ClientId),
-	YouWereKicked,
-	/// author, message
-	ClientToClientMessage(ClientId, RawMessageData),
-	ServerToClientMessage(RawMessageData),
-	Disconnected,
-	ConnectionRefused,
+    ConnectedSuccessfully,
+    NewClientConnected(ClientId),
+    ClientDisconnected(ClientId),
+    ClientKicked(ClientId),
+    YouWereKicked,
+    /// author, message
+    ClientToClientMessage(ClientId, RawMessageData),
+    ServerToClientMessage(RawMessageData),
+    Disconnected,
+    ConnectionRefused,
 }
