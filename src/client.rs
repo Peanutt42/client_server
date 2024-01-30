@@ -6,13 +6,15 @@ use crate::{ClientId, RawMessageData, ServerPacket, MAX_MESSAGE_SIZE};
 use crate::internal::{InternalClientPacket, InternalServerPacket};
 
 struct SharedData {
+	send_stream: TcpStream,
 	packets: VecDeque<ServerPacket>,
 	id: Option<ClientId>,
 }
 
 impl SharedData {
-	fn new() -> Self {
+	fn new(send_stream: TcpStream) -> Self {
 		Self {
+			send_stream,
 			packets: VecDeque::new(),
 			id: None,
 		}
@@ -25,21 +27,26 @@ impl SharedData {
 	fn server_refused(&mut self) {
 		self.packets.push_back(ServerPacket::ConnectionRefused);
 	}
+
+	fn send_packet(&mut self, packet: &InternalClientPacket) -> io::Result<()> {
+		match bincode::serialize(&packet) {
+			Ok(buffer) => self.send_stream.write_all(buffer.as_slice()),
+			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+		}
+	}
 }
 
 pub struct Client {
-	send_stream: TcpStream,
 	shared_data: Arc<Mutex<SharedData>>,
 }
 
 impl Client {
 	pub fn new(listen_stream: TcpStream, send_stream: TcpStream) -> Self {
-		let shared_data = Arc::new(Mutex::new(SharedData::new()));
+		let shared_data = Arc::new(Mutex::new(SharedData::new(send_stream)));
 		let shared_data_clone = shared_data.clone();
 		std::thread::spawn(move || Self::listen_thread(listen_stream, shared_data_clone));
 
 		Self {
-			send_stream,
 			shared_data,
 		}
 	}
@@ -56,21 +63,14 @@ impl Client {
 		Self::connect(("127.0.0.1", port))
 	}
 
-	fn send_packet(&mut self, packet: &InternalClientPacket) -> io::Result<()> {
-		match bincode::serialize(&packet) {
-			Ok(buffer) => self.send_stream.write_all(buffer.as_slice()),
-			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
-		}
-	}
-
 	pub fn send_to(&mut self, client_to_send_to: ClientId, message: &RawMessageData) -> io::Result<()> {
-		self.send_packet(&InternalClientPacket::PersonalMessage(client_to_send_to, message.clone()))
+		self.shared_data.lock().unwrap().send_packet(&InternalClientPacket::PersonalMessage(client_to_send_to, message.clone()))
 	}
 	pub fn send_to_all(&mut self, message: &RawMessageData) -> io::Result<()> {
-		self.send_packet(&InternalClientPacket::BroadcastMessage(message.clone()))
+		self.shared_data.lock().unwrap().send_packet(&InternalClientPacket::BroadcastMessage(message.clone()))
 	}
 	pub fn send_to_server(&mut self, message: &RawMessageData) -> io::Result<()> {
-		self.send_packet(&InternalClientPacket::ServerMessage(message.clone()))
+		self.shared_data.lock().unwrap().send_packet(&InternalClientPacket::ServerMessage(message.clone()))
 	}
 
 	pub fn get_packet(&mut self) -> Option<ServerPacket> {
@@ -107,6 +107,11 @@ impl Client {
 								InternalServerPacket::YouWereKicked => shared_data.packets.push_back(ServerPacket::YouWereKicked),
 								InternalServerPacket::ClientToClient(client_id, message) => shared_data.packets.push_back(ServerPacket::ClientToClientMessage(client_id, message)),
 								InternalServerPacket::ServerToClient(message) => shared_data.packets.push_back(ServerPacket::ServerToClientMessage(message)),
+								InternalServerPacket::Ping => {
+									if let Err(e) = shared_data.send_packet(&InternalClientPacket::PingRespone) {
+										eprintln!("error sending ping response: {e}");
+									}
+								},
 							}
 						},
 						Err(e) => eprintln!("Failed to parse server packet: {e}"),

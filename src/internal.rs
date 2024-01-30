@@ -10,6 +10,7 @@ pub enum InternalClientPacket {
     PersonalMessage(ClientId, RawMessageData),
     /// packet only gets sent to the server
     ServerMessage(RawMessageData),
+    PingRespone,
 }
 
 /// These are actually sent over the network
@@ -23,4 +24,5 @@ pub enum InternalServerPacket {
     /// author, message
     ClientToClient(ClientId, RawMessageData),
     ServerToClient(RawMessageData),
+    Ping,
 }

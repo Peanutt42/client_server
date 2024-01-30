@@ -15,7 +15,7 @@ fn main() {
 	let messages_to_send_clone = messages_to_send.clone();
 	std::thread::spawn(move || input_thread(messages_to_send_clone));
 
-	let mut client = Client::connect_localhost(8080).expect("Failed to connect to 127.0.0.1:8080");
+	let mut client = Client::connect("127.0.0.1:8080").expect("Failed to connect to 127.0.0.1:8080");
 	
 	loop {
 		{

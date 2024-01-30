@@ -2,17 +2,22 @@ use std::collections::{HashMap, VecDeque};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
+use std::time::{Instant, Duration};
 use crate::{ClientId, RawMessageData, MAX_MESSAGE_SIZE, ClientPacket, ClientMessage};
 use crate::internal::{InternalClientPacket, InternalServerPacket};
 
 pub struct ClientData {
 	stream: TcpStream,
+	ping_send_time: Option<Instant>,
+	last_ping: Option<Duration>,
 }
 
 impl ClientData {
 	fn new(stream: TcpStream) -> Self {
 		Self {
 			stream,
+			ping_send_time: None,
+			last_ping: None,
 		}
 	}
 }
@@ -21,7 +26,9 @@ pub struct SharedData {
 	clients: HashMap<ClientId, ClientData>,
 	next_id: ClientId,
 
-	pub packets: VecDeque<ClientPacket>,
+	ping_interval: Option<Duration>,
+
+	packets: VecDeque<ClientPacket>,
 }
 
 impl SharedData {
@@ -29,6 +36,7 @@ impl SharedData {
 		Self {
 			clients: HashMap::new(),
 			next_id: 0,
+			ping_interval: None,
 			packets: VecDeque::new(),
 		}
 	}
@@ -50,6 +58,13 @@ impl SharedData {
 		self.packets.push_back(ClientPacket::new(client_id, ClientMessage::Disconnected));
 		self.broadcast(&InternalServerPacket::ClientDisconnected(client_id), client_id).expect("failed to broadcast that a client has disconnected to all the other clients");
 		self.remove_client(client_id);
+	}
+
+	fn stream_send(packet: &InternalServerPacket, stream: &mut TcpStream) -> io::Result<()> {
+		match bincode::serialize(packet) {
+			Ok(buffer) => stream.write_all(buffer.as_slice()),
+			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+		}
 	}
 
 	fn send(&mut self, packet: &InternalServerPacket, client_id: ClientId) -> io::Result<()> {
@@ -164,6 +179,14 @@ impl Server {
 								InternalClientPacket::ServerMessage(message) => {
                                     shared_data.packets.push_back(ClientPacket::new(client_id, ClientMessage::ClientToServerMessage(message)));
                                 },
+								InternalClientPacket::PingRespone => {
+									if let Some(client) = shared_data.clients.get_mut(&client_id) {
+										if let Some(ping_send_time) = client.ping_send_time {
+											let round_trip_time = Instant::now() - ping_send_time;
+											client.last_ping = Some(round_trip_time.div_f32(2.0));
+										}
+									}
+								}
 							};
 						},
 						Err(e) => eprintln!("failed to deserialize packet from client {client_id}: {e}"),
@@ -224,6 +247,66 @@ impl Server {
 			.map_err(|e| e.to_string())?
 			.broadcast(&InternalServerPacket::ServerToClient(message.clone()), ignored_client)
 			.map_err(|e| e.to_string())
+	}
+
+	pub fn send(&mut self, message: &RawMessageData, client_id: ClientId) -> Result<(), String> {
+		self.shared_data.lock()
+			.map_err(|e| e.to_string())?
+			.send(&InternalServerPacket::ServerToClient(message.clone()), client_id)
+			.map_err(|e| e.to_string())
+	}
+
+	pub fn update_ping(&mut self) -> Result<(), String> {
+		let mut shared_data = self.shared_data.lock().map_err(|e| e.to_string())?;
+		if shared_data.ping_interval.is_none() {
+			return Err("ping_interval was not set, use server.set_ping_interval();".to_string());
+		}
+		
+		let ping_interval = shared_data.ping_interval.unwrap();
+		let mut error = Ok(());
+		for (_client_id, client) in shared_data.clients.iter_mut() {
+			let now = Instant::now();
+			if (client.ping_send_time.is_some() && now.duration_since(client.ping_send_time.unwrap()) >= ping_interval) ||
+				client.ping_send_time.is_none()
+			{
+				if let Err(e) = SharedData::stream_send(&InternalServerPacket::Ping, &mut client.stream).map_err(|e| e.to_string()) {
+					error = Err(e);
+				}
+				else {
+					client.ping_send_time = Some(now);
+				}
+			}
+		}
+		error
+	}
+
+	pub fn get_ping(&self, client_id: ClientId) -> Option<Duration> {
+		let shared_data = self.shared_data.lock().unwrap();
+		let client = shared_data.clients.get(&client_id)?;
+		client.last_ping
+	}
+
+	pub fn get_clients(&self) -> Vec<ClientId> {
+		self.shared_data.lock().unwrap().clients.keys().map(|client_id| *client_id).collect()
+	}
+
+	pub fn get_ping_interval(&self) -> Option<Duration> {
+		self.shared_data.lock().unwrap().ping_interval
+	}
+	pub fn set_ping_interval(&mut self, interval: Duration) {
+		self.shared_data.lock().unwrap().ping_interval = Some(interval);
+	}
+	pub fn disable_ping(&mut self) {
+		self.shared_data.lock().unwrap().ping_interval = None;
+	}
+
+	/// updates the server
+	/// if a ping_interval was set, it will get the ping every interval
+	pub fn update(&mut self) -> Result<(), String> {
+		if self.shared_data.lock().unwrap().ping_interval.is_some() {
+			self.update_ping()?;
+		}
+		Ok(())
 	}
 
 	pub fn get_packet(&mut self) -> Option<ClientPacket> {

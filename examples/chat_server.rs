@@ -11,7 +11,7 @@ fn input_thread(input_commands: Arc<Mutex<VecDeque<String>>>) {
 }
 
 fn main() {
-	let mut server = Server::bind_localhost(8080).expect("failed to bind server to 127.0.0.1:8080");
+	let mut server = Server::bind("0.0.0.0:8080").expect("failed to bind server to 0.0.0.0:8080");
 
 	let input_commands: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
 	let input_commands_clone = input_commands.clone();
@@ -50,17 +50,17 @@ fn main() {
 			}
 		}
 
-		if let Some(packet) = server.get_packet() {
-			let client_addres = server.get_client_ip_address(packet.author).unwrap_or("unkown".to_string());
+		while let Some(packet) = server.get_packet() {
+			let client_address = server.get_client_ip_address(packet.author).unwrap_or("unkown".to_string());
 			match packet.message {
 				ClientMessage::Connected => {
-					println!("New client {}: {client_addres}", packet.author);
+					println!("New client {}: {client_address}", packet.author);
 				}
 				ClientMessage::ClientToClientMessage(message) => {
-					println!("{client_addres} [{}]: {}", packet.author, String::from_utf8(message).unwrap());
+					println!("{client_address} [{}]: {}", packet.author, String::from_utf8(message).unwrap());
 				},
 				ClientMessage::ClientToServerMessage(message) => {
-					println!("{client_addres} [{}] (only to server): {}", packet.author, String::from_utf8(message).unwrap());
+					println!("{client_address} [{}] (only to server): {}", packet.author, String::from_utf8(message).unwrap());
 				}
 				ClientMessage::Disconnected => {
 					println!("Client {} disconnected", packet.author);
