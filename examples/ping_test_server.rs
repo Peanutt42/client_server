@@ -34,5 +34,10 @@ fn main() {
 		if let Some(interval) = server.get_ping_interval() {
 			std::thread::sleep(interval);
 		}
+
+
+		for e in server.get_error_log() {
+			eprintln!("error: {e}");
+		}
 	}
 }

@@ -67,6 +67,10 @@ fn main() {
 			}
 		}
 
+		for e in client.get_error_log() {
+			println!("error: {e}");
+		}
+
 		if exit {
             break;
         }

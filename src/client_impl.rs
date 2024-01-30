@@ -4,13 +4,14 @@ use std::io::{self, Write, Read};
 use std::sync::{Arc, Mutex};
 use crate::{MAX_MESSAGE_SIZE, ClientId, ServerPacket};
 use crate::internal::{InternalClientPacket, InternalServerPacket};
-use crate::client::Client;
+use crate::client::{Client, Error, Result};
 
 
 pub struct SharedData {
 	pub send_stream: TcpStream,
 	pub packets: VecDeque<ServerPacket>,
 	pub id: Option<ClientId>,
+	pub error_log: Vec<Error>,
 }
 
 impl SharedData {
@@ -19,6 +20,7 @@ impl SharedData {
 			send_stream,
 			packets: VecDeque::new(),
 			id: None,
+			error_log: Vec::new(),
 		}
 	}
 
@@ -30,10 +32,17 @@ impl SharedData {
 		self.packets.push_back(ServerPacket::ConnectionRefused);
 	}
 
-	pub fn send_packet(&mut self, packet: &InternalClientPacket) -> io::Result<()> {
+	pub fn send_packet(&mut self, packet: &InternalClientPacket) -> Result<()> {
 		match bincode::serialize(&packet) {
-			Ok(buffer) => self.send_stream.write_all(buffer.as_slice()),
-			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+			Ok(buffer) => {
+				if let Err(e) = self.send_stream.write_all(buffer.as_slice()) {
+					Err(Error::SendError { io_error: e })
+				}
+				else {
+					Ok(())
+				}
+			},
+			Err(e) => Err(Error::SerializePacket { bincode_error: e.to_string() }),
 		}
 	}
 }
@@ -49,10 +58,10 @@ impl Client {
 						shared_data.lock().unwrap().server_disconnected();
 						break;
 					}
-	
+					
+					let mut shared_data = shared_data.lock().unwrap();
 					match bincode::deserialize(&buffer[..bytes_read]) {
 						Ok(packet) => {
-							let mut shared_data = shared_data.lock().unwrap();
 							match packet {
 								InternalServerPacket::ConnectResponse(client_id) => {
 									shared_data.id = Some(client_id);
@@ -66,12 +75,12 @@ impl Client {
 								InternalServerPacket::ServerToClient(message) => shared_data.packets.push_back(ServerPacket::ServerToClientMessage(message)),
 								InternalServerPacket::Ping => {
 									if let Err(e) = shared_data.send_packet(&InternalClientPacket::PingRespone) {
-										eprintln!("error sending ping response: {e}");
+										shared_data.error_log.push(e);
 									}
 								},
 							}
 						},
-						Err(e) => eprintln!("Failed to parse server packet: {e}"),
+						Err(e) => shared_data.error_log.push(Error::DeserializePacket { bincode_error: e.to_string() }),
 					}
 				}
 				Err(e) => {
@@ -84,7 +93,7 @@ impl Client {
 							shared_data.lock().unwrap().server_refused();
 							break;
 						}
-						_ => eprintln!("failed to read from server: {e}"),
+						_ => shared_data.lock().unwrap().error_log.push(Error::ReadError { io_error: e }),
 					}
 					break;
 				}

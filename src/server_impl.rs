@@ -4,7 +4,7 @@ use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, Duration};
 use crate::{ClientId, MAX_MESSAGE_SIZE, ClientPacket, ClientMessage};
-use crate::server::Server;
+use crate::server::{Server, Error, Result};
 use crate::internal::{InternalClientPacket, InternalServerPacket};
 
 pub struct ClientData {
@@ -30,6 +30,8 @@ pub struct SharedData {
 	pub ping_interval: Option<Duration>,
 
 	pub packets: VecDeque<ClientPacket>,
+
+	pub error_log: Vec<Error>,
 }
 
 impl SharedData {
@@ -39,6 +41,7 @@ impl SharedData {
 			next_id: 0,
 			ping_interval: None,
 			packets: VecDeque::new(),
+			error_log: Vec::new(),
 		}
 	}
 
@@ -61,55 +64,69 @@ impl SharedData {
 		self.remove_client(client_id);
 	}
 
-	pub fn stream_send(packet: &InternalServerPacket, stream: &mut TcpStream) -> io::Result<()> {
+	pub fn stream_send(packet: &InternalServerPacket, stream: &mut TcpStream, client_id: ClientId) -> Result<()> {
 		match bincode::serialize(packet) {
-			Ok(buffer) => stream.write_all(buffer.as_slice()),
-			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+			Ok(buffer) => {
+				if let Err(e) = stream.write_all(buffer.as_slice()) {
+					Err(Error::SendError { client_id, io_error: e })
+				}
+				else {
+					Ok(())
+				}
+			},
+			Err(e) => Err(Error::SerializePacket{ bincode_error: e.to_string() }),
 		}
 	}
 
-	pub fn send(&mut self, packet: &InternalServerPacket, client_id: ClientId) -> io::Result<()> {
+	pub fn send(&mut self, packet: &InternalServerPacket, client_id: ClientId) -> Result<()> {
 		match bincode::serialize(packet) {
 			Ok(buffer) => {
 				match self.clients.get_mut(&client_id) {
-					Some(client) => client.stream.write_all(buffer.as_slice()),
-					None => Err(io::Error::new(io::ErrorKind::Other, "Client id doesn't exist")),
+					Some(client) => {
+						if let Err(e) = client.stream.write_all(buffer.as_slice()) {
+							Err(Error::SendError { client_id, io_error: e })
+						}
+						else {
+							Ok(())
+						}
+					},
+					None => Err(Error::InvalidClientId { client_id }),
 				}
 			},
-			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+			Err(e) => Err(Error::SerializePacket { bincode_error: e.to_string() }),
 		}
 	}
 
-	pub fn broadcast_all(&mut self, packet: &InternalServerPacket) -> io::Result<()> {
+	pub fn broadcast_all(&mut self, packet: &InternalServerPacket) -> Result<()> {
 		match bincode::serialize(packet) {
 			Ok(buffer) => {
 				let mut error_msg = Ok(());
-				for (_client_id, client) in self.clients.iter_mut() {
+				for (client_id, client) in self.clients.iter_mut() {
 					if let Err(e) = client.stream.write_all(buffer.as_slice()) {
-						error_msg = Err(e);
+						error_msg = Err(Error::SendError { client_id: *client_id, io_error: e });
 					}
 				}
 				error_msg
 			},
-			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+			Err(e) => Err(Error::SerializePacket{ bincode_error: e.to_string() }),
 		}
 	}
 
 	/// if you want to broadcast to all clients, use `broadcast_all`
-	pub fn broadcast(&mut self, packet: &InternalServerPacket, ignored_client: ClientId) -> io::Result<()> {
+	pub fn broadcast(&mut self, packet: &InternalServerPacket, ignored_client: ClientId) -> Result<()> {
 		match bincode::serialize(packet) {
 			Ok(buffer) => {
 				let mut error_msg = Ok(());
 				for (client_id, client) in self.clients.iter_mut() {
 					if *client_id != ignored_client {
 						if let Err(e) = client.stream.write_all(buffer.as_slice()) {
-							error_msg = Err(e);
+							error_msg = Err(Error::SendError { client_id: *client_id, io_error: e });
 						}
 					}
 				}
 				error_msg
 			},
-			Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+			Err(e) => Err(Error::SerializePacket{ bincode_error: e.to_string() }),
 		}
 	}
 }
@@ -140,7 +157,7 @@ impl Server {
 							break;
 						}
 					}
-					eprintln!("error accepting connection: {e}");
+					shared_data.lock().unwrap().error_log.push(Error::ErrorAcceptingConnection { io_error: e });
 				}
 			}
 		}
@@ -173,13 +190,13 @@ impl Server {
 								InternalClientPacket::BroadcastMessage(message) => {
 									shared_data.packets.push_back(ClientPacket::new(client_id, ClientMessage::ClientToClientMessage(message.clone())));
 									if let Err(e) = shared_data.broadcast(&InternalServerPacket::ClientToClient(client_id, message), client_id) {
-										eprintln!("failed to broadcast a client message to the other clients: {e}");
+										shared_data.error_log.push(e);
 									}
 								},
 								InternalClientPacket::PersonalMessage(target_client_id, message) => {
 									shared_data.packets.push_back(ClientPacket::new(client_id, ClientMessage::ClientToClientMessage(message.clone())));
                                     if let Err(e) = shared_data.send(&InternalServerPacket::ClientToClient(client_id, message), target_client_id) {
-										eprintln!("failed to redirect a personal client message to another client: {e}");
+										shared_data.error_log.push(e);
 									}
 								},
 								InternalClientPacket::ServerMessage(message) => {
@@ -195,7 +212,7 @@ impl Server {
 								}
 							};
 						},
-						Err(e) => eprintln!("failed to deserialize packet from client {client_id}: {e}"),
+						Err(e) => shared_data.lock().unwrap().error_log.push(Error::DeserializePacket { bincode_error: e.to_string() }),
 					}
 				}
 				Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::ConnectionReset || e.kind() == io::ErrorKind::ConnectionAborted => (),
@@ -208,7 +225,7 @@ impl Server {
 							break;
 						}
 					}
-					eprintln!("failed to read stream from client {client_id}: {e}");
+					shared_data.lock().unwrap().error_log.push(Error::ReadError { client_id, io_error: e });
 					break;
 				}
 			}

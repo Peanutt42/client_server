@@ -19,12 +19,16 @@ fn main() {
 					break;
 				},
 				ServerPacket::ConnectionRefused => {
-					println!("Server refused connection!");
+					eprintln!("Server refused connection!");
 					exit = true;
 					break;
 				},
 				_ => {},
 			}
+		}
+
+		for e in client.get_error_log() {
+			eprintln!("error: {e}");
 		}
 
 		if exit {

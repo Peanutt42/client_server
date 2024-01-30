@@ -68,5 +68,9 @@ fn main() {
 			}
 			
 		}
+		
+		for e in server.get_error_log() {
+			eprintln!("error: {e}");
+		}
 	}
 }
