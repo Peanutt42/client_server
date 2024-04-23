@@ -1,7 +1,7 @@
 use std::io;
-use std::net::IpAddr;
+use std::net::SocketAddr;
 use std::collections::HashMap;
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Serialize};
 use crate::transport::{ServerTransport, ServerTransportEvent};
 
 pub type ClientId = usize;
@@ -23,28 +23,39 @@ pub enum ServerEvent<Msg> {
 
 pub struct Server {
 	transport: Box<dyn ServerTransport>,
-	pub(crate) address_to_client_id: HashMap<IpAddr, ClientId>,
+	pub(crate) client_addresses: HashMap<ClientId, SocketAddr>,
 }
 
 impl Server {
 	pub fn new(transport: Box<dyn ServerTransport>) -> Self {
 		Self {
 			transport,
-			address_to_client_id: HashMap::new(),
+			client_addresses: HashMap::new(),
+		}
+	}
+
+	pub fn send_to<Msg: Serialize>(&mut self, client_id: ClientId, msg: &Msg) {
+		if let Some(address) = self.client_addresses.get(&client_id) {
+			if let Ok(bytes) = bincode::serialize(msg) {
+				self.transport.send(*address, &bytes);
+			}
 		}
 	}
 
 	pub fn receive_event<Msg: DeserializeOwned>(&mut self) -> Option<ServerEvent<Msg>> {
 		match self.transport.receive_event()? {
 			ServerTransportEvent::NewClient(address) => {
-				Some(ServerEvent::NewClient(self.get_client_id(address)))
+				let client_id = Self::client_id_from_address(address);
+				self.client_addresses.insert(client_id, address);
+				Some(ServerEvent::NewClient(client_id))
 			},
 			ServerTransportEvent::ClientDisconnected(address) => {
-				Some(ServerEvent::ClientDisconnected(self.get_client_id(address)))
-				// TODO: Actually remove client info
+				let client_id = Self::client_id_from_address(address);
+				self.client_addresses.remove(&client_id);
+				Some(ServerEvent::ClientDisconnected(client_id))
 			},
 			ServerTransportEvent::NewMsg(transport_msg) => {
-				let sender_id = self.get_client_id(transport_msg.sender_address);
+				let sender_id = Self::client_id_from_address(transport_msg.sender_address);
 
 				match bincode::deserialize(&transport_msg.data) {
 					Ok(msg) => {

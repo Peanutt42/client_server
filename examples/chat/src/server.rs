@@ -1,5 +1,5 @@
 use client_server::{Server, ServerEvent, transport::ServerTransport};
-use crate::{ClientToServerMsg, spawn_press_enter_to_quit_thread};
+use crate::{ClientToServerMsg, ServerToClientMsg, spawn_press_enter_to_quit_thread};
 
 pub fn run(server_transport: Box<dyn ServerTransport>) {
 	let mut server = Server::new(server_transport);
@@ -23,6 +23,7 @@ pub fn run(server_transport: Box<dyn ServerTransport>) {
 					match client_msg.msg {
 						ClientToServerMsg::TextMsg(text) => {
 							println!("New msg from {}: {}", client_msg.sender_id, text);
+							server.send_to(client_msg.sender_id, &ServerToClientMsg::TextMsgReceived)
 						},
 					}
 				},

@@ -1,35 +1,45 @@
-use std::collections::VecDeque;
+use crate::transport::{ClientTransport, ClientTransportEvent};
+use serde::{de::DeserializeOwned, Serialize};
 
-use crate::transport::ClientTransport;
-use serde::Serialize;
-
-pub enum ClientEvent {
+pub enum ClientEvent<Msg> {
+	MsgFromServer(Msg),
+	FailedToReceiveMsg(std::io::Error),
+	FailedToParseMsg(Box<bincode::ErrorKind>),
 	ServerDisconnected,
 }
 
 pub struct Client {
 	transport: Box<dyn ClientTransport>,
-	events: VecDeque<ClientEvent>,
 }
 
 impl Client {
 	pub fn new(stream_transport: Box<dyn ClientTransport>) -> Self {
 		Self {
 			transport: stream_transport,
-			events: VecDeque::new(),
 		}
 	}
 
-	pub fn handle_event(&mut self) -> Option<ClientEvent> {
-		self.events.pop_front()
+	pub fn handle_event<Msg: DeserializeOwned>(&mut self) -> Option<ClientEvent<Msg>> {
+		if let Some(event) = self.transport.receive_event() {
+			match event {
+				ClientTransportEvent::ServerDisconnected => Some(ClientEvent::ServerDisconnected),
+				ClientTransportEvent::FailedToReceiveMsg(e) => Some(ClientEvent::FailedToReceiveMsg(e)),
+				ClientTransportEvent::NewMsg(data) => {
+					match bincode::deserialize(&data) {
+						Ok(msg) => Some(ClientEvent::MsgFromServer(msg)),
+						Err(e) => Some(ClientEvent::FailedToParseMsg(e)),
+					}
+				}
+			}
+		}
+		else {
+			None
+		}
 	}
 
-	pub fn send<T: Serialize>(&mut self, msg: T) -> anyhow::Result<()> {
-		let data = bincode::serialize(&msg)?;
-		if self.transport.send(&data).is_err() {
-			// TODO: move this into the transport event handeling, once we start receiving messages from the server
-			self.events.push_back(ClientEvent::ServerDisconnected);
+	pub fn send<T: Serialize>(&mut self, msg: &T) {
+		if let Ok(data) = bincode::serialize(msg) {
+			self.transport.send(&data);
 		}
-		Ok(())
 	}
 }

@@ -10,6 +10,11 @@ pub enum ClientToServerMsg {
 	TextMsg(String),
 }
 
+#[derive(Serialize, Deserialize)]
+pub enum ServerToClientMsg {
+	TextMsgReceived,
+}
+
 pub fn spawn_press_enter_to_quit_thread() -> std::sync::mpsc::Receiver<()> {
 	let (sender, reciever) = std::sync::mpsc::channel();
 
