@@ -22,8 +22,8 @@ pub fn run(server_transport: Box<dyn ServerTransport>) {
 				ServerEvent::NewMsg(client_msg) => {
 					match client_msg.msg {
 						ClientToServerMsg::TextMsg(text) => {
-							println!("New msg from {}: {}", client_msg.sender_id, text);
-							server.send_to(client_msg.sender_id, &ServerToClientMsg::TextMsgReceived)
+							println!("New msg from {}: {}", client_msg.client_id, text);
+							server.send_to(client_msg.client_id, &ServerToClientMsg::TextMsgReceived)
 						},
 					}
 				},

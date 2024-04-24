@@ -56,7 +56,11 @@ impl TcpClientTransport {
 							let _ = sender.send(ClientTransportEvent::ServerDisconnected);
 							return;
 						}
-						_ => sender.send(ClientTransportEvent::FailedToReceiveMsg(e)).unwrap(),
+						_ => {
+							if sender.send(ClientTransportEvent::FailedToReceiveMsg(e)).is_err() {
+								return;
+							}
+						},
 					}
 				}
 			}
@@ -111,7 +115,9 @@ impl TcpServerTransport {
 
 	fn handle_client_thread(mut stream: TcpStream, address: SocketAddr, sender: Arc<Sender<ServerTransportEvent>>) {
 		let mut buffer = [0; MAX_MSG_SIZE];
-		sender.send(ServerTransportEvent::NewClient(address)).unwrap();
+		if sender.send(ServerTransportEvent::NewClient(address)).is_err() {
+			return;
+		}
 
 		loop {
 			match stream.read(&mut buffer) {
@@ -141,7 +147,11 @@ impl TcpServerTransport {
 							let _ = sender.send(ServerTransportEvent::ClientDisconnected(address));
 							return;
 						}
-						_ => sender.send(ServerTransportEvent::FailedToReceiveMsg(e)).unwrap(),
+						_ => {
+							if sender.send(ServerTransportEvent::FailedToReceiveMsg(e)).is_err() {
+								return;
+							}
+						},
 					}
 				}
 			}

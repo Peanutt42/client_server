@@ -6,9 +6,11 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.82"
 bincode = "1.3.3"
+rand = "0.8.5"
 serde = { version = "1.0", features = ["derive"] }
 
 [workspace]
 members = [
-	"examples/chat"
+	"examples/chat",
+	"examples/simulator",
 ]

@@ -6,6 +6,7 @@ pub const MAX_MSG_SIZE: usize = 65507;
 
 pub mod tcp;
 pub mod udp;
+pub mod simulator;
 
 pub struct TransportMsg {
 	pub sender_address: SocketAddr,

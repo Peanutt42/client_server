@@ -12,7 +12,6 @@ enum UdpMsg {
 	Disconnected
 }
 
-// TODO: once we combine / refactor udp transport and have the client receive from the server, add a udp_msg::Disconnected like with the client already
 pub struct UdpClientTransport {
 	socket: UdpSocket,
 	transport_msg_receiver: Receiver<ClientTransportEvent>,
@@ -46,7 +45,6 @@ impl UdpClientTransport {
 			match socket.recv_from(&mut buffer) {
 				Ok((bytes_read, address)) => {
 					if !server_addresses.contains(&address) {
-						println!("unkown ip address tried to send to use!");
 						continue;
 					}
 
@@ -56,8 +54,7 @@ impl UdpClientTransport {
 								UdpMsg::InnerMsg(data) => ClientTransportEvent::NewMsg(data),
 								UdpMsg::Disconnected => ClientTransportEvent::ServerDisconnected,
 							};
-							let res = sender.send(event);
-							if res.is_err() {
+							if sender.send(event).is_err() {
 								break;
 							}
 						},

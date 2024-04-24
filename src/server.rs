@@ -8,7 +8,7 @@ pub type ClientId = usize;
 
 #[derive(Debug, Clone)]
 pub struct ClientMsg<Msg> {
-	pub sender_id: ClientId,
+	pub client_id: ClientId,
 	pub msg: Msg,
 }
 
@@ -55,16 +55,16 @@ impl Server {
 				Some(ServerEvent::ClientDisconnected(client_id))
 			},
 			ServerTransportEvent::NewMsg(transport_msg) => {
-				let sender_id = Self::client_id_from_address(transport_msg.sender_address);
+				let client_id = Self::client_id_from_address(transport_msg.sender_address);
 
 				match bincode::deserialize(&transport_msg.data) {
 					Ok(msg) => {
 						Some(ServerEvent::NewMsg(ClientMsg {
-							sender_id,
+							client_id,
 							msg,
 						}))
 					},
-					Err(_e) => Some(ServerEvent::FailedToParseMsg(sender_id)),
+					Err(_e) => Some(ServerEvent::FailedToParseMsg(client_id)),
 				}
 			},
 			ServerTransportEvent::FailedToReceiveMsg(error) => Some(ServerEvent::FailedToReceiveMsg(error)),
